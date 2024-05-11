@@ -1,0 +1,5 @@
+runs
+weights
+terminal-out.txt
+tokenizer_*.json
+.DS_store
