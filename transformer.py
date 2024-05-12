@@ -1,5 +1,4 @@
 # Importing libraries
-import os
 # PyTorch
 import torch
 import torch.nn as nn
@@ -24,12 +23,6 @@ from typing import Any
 
 # Library for progress bars in loops
 from tqdm import tqdm
-
-# Importing library of warnings
-import warnings
-
-from dotenv import load_dotenv
-load_dotenv()
 
 # Creating Input Embeddings
 class InputEmbeddings(nn.Module):
@@ -360,14 +353,25 @@ def get_all_sentences(ds, lang):
     for pair in ds:
         yield pair['translation'][lang]
 
+def get_tokenizer_path(config, lang): 
+    return Path(config['tokenizer_file'].format(lang))
+
+def get_tokenizer(config, lang):
+    # Creating a file path for the tokenizer 
+    tokenizer_path = get_tokenizer_path(config, lang)
+
+    if not Path.exists(tokenizer_path): return None
+
+    return Tokenizer.from_file(str(tokenizer_path))
+
 # Defining Tokenizer
-def build_tokenizer(config, ds, lang):
+def build_tokenizer(config, lang, ds = None):
     
     # Crating a file path for the tokenizer 
-    tokenizer_path = Path(config['tokenizer_file'].format(lang))
+    tokenizer = get_tokenizer(config, lang)
     
     # Checking if Tokenizer already exists
-    if not Path.exists(tokenizer_path): 
+    if not tokenizer: 
         
         # If it doesn't exist, we create a new one
         tokenizer = Tokenizer(WordLevel(unk_token = '[UNK]')) # Initializing a new world-level tokenizer
@@ -379,10 +383,42 @@ def build_tokenizer(config, ds, lang):
         
         # Training new tokenizer on sentences from the dataset and language specified 
         tokenizer.train_from_iterator(get_all_sentences(ds, lang), trainer = trainer)
-        tokenizer.save(str(tokenizer_path)) # Saving trained tokenizer to the file path specified at the beginning of the function
-    else:
-        tokenizer = Tokenizer.from_file(str(tokenizer_path)) # If the tokenizer already exist, we load it
+        tokenizer.save(str(get_tokenizer_path(config, lang))) # Saving trained tokenizer to the file
+
     return tokenizer # Returns the loaded tokenizer or the trained tokenizer
+
+def get_token_tenzor(tokenizer, token):
+    return torch.tensor([tokenizer.token_to_id(token)], dtype=torch.int64)
+
+def encode_tokens(tokenizer, text): 
+    return tokenizer.encode(text).ids
+
+def get_encoder_input_paddings_num(seq_len, encoder_input_tokens):
+    return seq_len - len(encoder_input_tokens) - 2 # Subtracting the two '[EOS]' and '[SOS]' special tokens
+
+def get_decoder_input_paddings_num(seq_len, dec_input_tokens):
+    return seq_len - len(dec_input_tokens) - 1 # Subtracting the '[SOS]' special token
+
+def get_encoder_input(src_text, tokenizer_tgt, tokenizer_src, seq_len):
+    sos_token = get_token_tenzor(tokenizer_tgt, "[SOS]")
+    eos_token = get_token_tenzor(tokenizer_tgt, "[EOS]")
+    pad_token = get_token_tenzor(tokenizer_tgt, "[PAD]")
+
+    enc_input_tokens = encode_tokens(tokenizer_src, src_text)
+    enc_num_padding_tokens = get_encoder_input_paddings_num(seq_len, enc_input_tokens)
+
+    return torch.cat(
+            [
+            sos_token, # inserting the '[SOS]' token
+            torch.tensor(enc_input_tokens, dtype = torch.int64), # Inserting the tokenized source text
+            eos_token, # Inserting the '[EOS]' token
+            torch.tensor([pad_token] * enc_num_padding_tokens, dtype = torch.int64) # Addind padding tokens
+            ]
+        )
+
+def get_mask(input, tokenizer):
+    pad_token = get_token_tenzor(tokenizer, "[PAD]")
+    return (input != pad_token).unsqueeze(0).unsqueeze(0).int()
 
 class BilingualDataset(Dataset):
     
@@ -399,9 +435,9 @@ class BilingualDataset(Dataset):
         self.tgt_lang = tgt_lang
         
         # Defining special tokens by using the target language tokenizer
-        self.sos_token = torch.tensor([tokenizer_tgt.token_to_id("[SOS]")], dtype=torch.int64)
-        self.eos_token = torch.tensor([tokenizer_tgt.token_to_id("[EOS]")], dtype=torch.int64)
-        self.pad_token = torch.tensor([tokenizer_tgt.token_to_id("[PAD]")], dtype=torch.int64)
+        self.sos_token = get_token_tenzor(tokenizer_tgt, "[SOS]")
+        self.eos_token = get_token_tenzor(tokenizer_tgt, "[EOS]")
+        self.pad_token = get_token_tenzor(tokenizer_tgt, "[PAD]")
 
         
     # Total number of instances in the dataset (some pairs are larger than others)
@@ -415,14 +451,14 @@ class BilingualDataset(Dataset):
         tgt_text = src_target_pair['translation'][self.tgt_lang]
         
         # Tokenizing source and target texts 
-        enc_input_tokens = self.tokenizer_src.encode(src_text).ids
-        dec_input_tokens = self.tokenizer_tgt.encode(tgt_text).ids
+        enc_input_tokens = encode_tokens(self.tokenizer_src, src_text)
+        dec_input_tokens = encode_tokens(self.tokenizer_tgt, tgt_text)
         
         # Computing how many padding tokens need to be added to the tokenized texts 
         # Source tokens
-        enc_num_padding_tokens = self.seq_len - len(enc_input_tokens) - 2 # Subtracting the two '[EOS]' and '[SOS]' special tokens
+        enc_num_padding_tokens = get_encoder_input_paddings_num(self.seq_len, enc_input_tokens)
         # Target tokens
-        dec_num_padding_tokens = self.seq_len - len(dec_input_tokens) - 1 # Subtracting the '[SOS]' special token
+        dec_num_padding_tokens = get_decoder_input_paddings_num(self.seq_len, dec_input_tokens)
         
         # If the texts exceed the 'seq_len' allowed, it will raise an error. This means that one of the sentences in the pair is too long to be processed
         # given the current sequence length limit (this will be defined in the config dictionary below)
@@ -430,14 +466,7 @@ class BilingualDataset(Dataset):
             raise ValueError('Sentence is too long')
          
         # Building the encoder input tensor by combining several elements
-        encoder_input = torch.cat(
-            [
-            self.sos_token, # inserting the '[SOS]' token
-            torch.tensor(enc_input_tokens, dtype = torch.int64), # Inserting the tokenized source text
-            self.eos_token, # Inserting the '[EOS]' token
-            torch.tensor([self.pad_token] * enc_num_padding_tokens, dtype = torch.int64) # Addind padding tokens
-            ]
-        )
+        encoder_input = get_encoder_input(src_text, self.tokenizer_tgt, self.tokenizer_src, self.seq_len)
         
         # Building the decoder input tensor by combining several elements
         decoder_input = torch.cat(
@@ -467,8 +496,8 @@ class BilingualDataset(Dataset):
         return {
             'encoder_input': encoder_input,
             'decoder_input': decoder_input, 
-            'encoder_mask': (encoder_input != self.pad_token).unsqueeze(0).unsqueeze(0).int(),
-            'decoder_mask': (decoder_input != self.pad_token).unsqueeze(0).unsqueeze(0).int() & casual_mask(decoder_input.size(0)), 
+            'encoder_mask': get_mask(encoder_input, self.tokenizer_tgt),
+            'decoder_mask': get_mask(decoder_input, self.tokenizer_tgt) & casual_mask(decoder_input.size(0)), 
             'label': label,
             'src_text': src_text,
             'tgt_text': tgt_text
@@ -478,11 +507,11 @@ def get_ds(config):
     
     # Loading the train portion of the OpusBooks dataset.
     # The Language pairs will be defined in the 'config' dictionary we will build later
-    ds_raw = load_dataset('Helsinki-NLP/opus-100', f'{config["lang_src"]}-{config["lang_tgt"]}', split = 'train[:1%]') 
+    ds_raw = load_dataset('Helsinki-NLP/opus-100', f'{config["lang_src"]}-{config["lang_tgt"]}', split = 'train[0:500]') 
     
     # Building or loading tokenizer for both the source and target languages 
-    tokenizer_src = build_tokenizer(config, ds_raw, config['lang_src'])
-    tokenizer_tgt = build_tokenizer(config, ds_raw, config['lang_tgt'])
+    tokenizer_src = build_tokenizer(config, config['lang_src'], ds_raw)
+    tokenizer_tgt = build_tokenizer(config, config['lang_tgt'], ds_raw)
     
     # Splitting the dataset for training and validation 
     train_ds_size = int(0.9 * len(ds_raw)) # 90% for training
@@ -603,12 +632,16 @@ def get_weights_file_path(config, epoch: str):
     model_filename = f"{model_basename}{epoch}.pt" # Building filename
     return str(Path('.')/ model_folder/ model_filename) # Combining current directory, the model folder, and the model filename
 
-def train_model(config):
+def get_device():
     # Setting up device to run on GPU to train faster
     device_id = 'cpu'
     if torch.backends.mps.is_available(): device_id = 'mps'
     if torch.cuda.is_available(): device_id = 'cuda'
     device = torch.device(device_id)
+    return device
+
+def train_model(config):
+    device = get_device()
     print(f"Using device {device}")
     
     # Creating model directory to store weights
@@ -726,7 +759,8 @@ def get_config(lang_src,
                model_basename = 'tmodel_',
                preload = None,
                tokenizer_file = 'tokenizer_{0}.json',
-               experiment_name = 'runs/tmodel'):
+               experiment_name = 'runs/tmodel',
+               train_preload=None):
     return {
         'batch_size': batch_size,
         'num_epochs': num_epochs,
@@ -739,10 +773,41 @@ def get_config(lang_src,
         'model_basename': model_basename,
         'preload': preload,
         'tokenizer_file': f'{lang_src}-to-{lang_tgt}/{tokenizer_file}',
-        'experiment_name': f'{lang_src}-to-{lang_tgt}/{experiment_name}'
+        'experiment_name': f'{lang_src}-to-{lang_tgt}/{experiment_name}',
+        'train_preload': train_preload,
     }
 
-if __name__ == '__main__':
-    warnings.filterwarnings('ignore') # Filtering warnings
-    config = get_config(lang_src=os.getenv('lang_src'), lang_tgt=os.getenv('lang_tgt'), seq_len=int(os.getenv('seq_len')), preload=os.getenv('preload'), num_epochs=int(os.getenv('num_epochs'))) # Retrieving config settings
-    train_model(config) # Training model with the config arguments
+def translate(config): 
+    # Pick device
+    device = get_device()
+    print(f"Using device {device}")
+
+    # Get tokenizers
+    tokenizer_src = get_tokenizer(config, config['lang_src'])
+    tokenizer_tgt = get_tokenizer(config, config['lang_tgt'])
+
+    # Create model
+    model = get_model(config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()).to(device)
+    model.eval()
+
+    # Load pretrained state
+    if config['train_preload']:
+        model_filename = get_weights_file_path(config, config['train_preload'])
+        print(f'Preloading model {model_filename}')
+        state = torch.load(model_filename)
+        model.load_state_dict(state['model_state_dict'])
+    else: 
+        return
+    
+    seq_len = config['seq_len']
+    
+    src_text = input(f'Enter text[{config["lang_src"]}]: ')
+    encoder_input = get_encoder_input(src_text, tokenizer_tgt, tokenizer_src, seq_len)
+    encoder_mask = get_mask(encoder_input, tokenizer_tgt)
+
+    model.eval()
+    with torch.no_grad():
+        model_out = greedy_decode(model, encoder_input.to(device), encoder_mask.to(device), tokenizer_src, tokenizer_tgt, seq_len, device)
+
+        model_out_text = tokenizer_tgt.decode(model_out.detach().cpu().numpy())
+        print(f'Translation[{config["lang_tgt"]}]: {model_out_text}')
