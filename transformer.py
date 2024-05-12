@@ -1,5 +1,5 @@
 # Importing libraries
-
+import os
 # PyTorch
 import torch
 import torch.nn as nn
@@ -24,6 +24,12 @@ from typing import Any
 
 # Library for progress bars in loops
 from tqdm import tqdm
+
+# Importing library of warnings
+import warnings
+
+from dotenv import load_dotenv
+load_dotenv()
 
 # Creating Input Embeddings
 class InputEmbeddings(nn.Module):
@@ -472,7 +478,7 @@ def get_ds(config):
     
     # Loading the train portion of the OpusBooks dataset.
     # The Language pairs will be defined in the 'config' dictionary we will build later
-    ds_raw = load_dataset('opus_books', f'{config["lang_src"]}-{config["lang_tgt"]}', split = 'train') 
+    ds_raw = load_dataset('Helsinki-NLP/opus-100', f'{config["lang_src"]}-{config["lang_tgt"]}', split = 'train[:1%]') 
     
     # Building or loading tokenizer for both the source and target languages 
     tokenizer_src = build_tokenizer(config, ds_raw, config['lang_src'])
@@ -599,7 +605,10 @@ def get_weights_file_path(config, epoch: str):
 
 def train_model(config):
     # Setting up device to run on GPU to train faster
-    device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+    device_id = 'cpu'
+    if torch.backends.mps.is_available(): device_id = 'mps'
+    if torch.cuda.is_available(): device_id = 'cuda'
+    device = torch.device(device_id)
     print(f"Using device {device}")
     
     # Creating model directory to store weights
@@ -706,7 +715,7 @@ def train_model(config):
 # Define settings for building and training the transformer model
 def get_config(lang_src, 
                lang_tgt, 
-               seg_len, 
+               seq_len, 
                d_model = 512, 
                batch_size = 8, 
                num_epochs = 20, 
@@ -720,13 +729,18 @@ def get_config(lang_src,
         'batch_size': batch_size,
         'num_epochs': num_epochs,
         'lr': lr,
-        'seq_len': seg_len,
+        'seq_len': seq_len,
         'd_model': d_model, # Dimensions of the embeddings in the Transformer. 512 like in the "Attention Is All You Need" paper.
         'lang_src': lang_src,
         'lang_tgt': lang_tgt,
-        'model_folder': model_folder,
+        'model_folder': f'{lang_src}-to-{lang_tgt}/{model_folder}',
         'model_basename': model_basename,
         'preload': preload,
-        'tokenizer_file': tokenizer_file,
-        'experiment_name': experiment_name
+        'tokenizer_file': f'{lang_src}-to-{lang_tgt}/{tokenizer_file}',
+        'experiment_name': f'{lang_src}-to-{lang_tgt}/{experiment_name}'
     }
+
+if __name__ == '__main__':
+    warnings.filterwarnings('ignore') # Filtering warnings
+    config = get_config(lang_src=os.getenv('lang_src'), lang_tgt=os.getenv('lang_tgt'), seq_len=int(os.getenv('seq_len')), preload=os.getenv('preload'), num_epochs=int(os.getenv('num_epochs'))) # Retrieving config settings
+    train_model(config) # Training model with the config arguments
