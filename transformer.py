@@ -4,7 +4,9 @@ import os
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter\
+
+import time
 
 # Math
 import math
@@ -642,6 +644,8 @@ def get_device():
     return device
 
 def train_model(config):
+    print(config)
+
     device = get_device()
     print(f"Using device {device}")
     
@@ -687,6 +691,7 @@ def train_model(config):
     loss_fn = nn.CrossEntropyLoss(ignore_index = tokenizer_src.token_to_id('[PAD]'), label_smoothing = 0.1).to(device)
     
     # Initializing training loop 
+    overall_time = 0
     
     # Iterating over each epoch from the 'initial_epoch' variable up to
     # the number of epochs informed in the config
@@ -706,10 +711,14 @@ def train_model(config):
             encoder_mask = batch['encoder_mask'].to(device)
             decoder_mask = batch['decoder_mask'].to(device)
             
+            start_time = time.time()
             # Running tensors through the Transformer
             encoder_output = model.encode(encoder_input, encoder_mask)
             decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask)
             proj_output = model.project(decoder_output)
+            end_time = time.time()
+
+            overall_time += (end_time - start_time)
             
             # Loading the target labels onto the GPU
             label = batch['label'].to(device)
@@ -747,6 +756,8 @@ def train_model(config):
             'optimizer_state_dict': optimizer.state_dict(), # Current optimizer state
             'global_step': global_step # Current global step 
         }, model_filename)
+    
+    print(f'Overall training time: {overall_time} seconds, epochs passed: {config["num_epochs"]}')
 
 # Define settings for building and training the transformer model
 def get_config():
