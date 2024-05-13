@@ -1,4 +1,5 @@
 # Importing libraries
+import os
 # PyTorch
 import torch
 import torch.nn as nn
@@ -507,7 +508,7 @@ def get_ds(config):
     
     # Loading the train portion of the OpusBooks dataset.
     # The Language pairs will be defined in the 'config' dictionary we will build later
-    ds_raw = load_dataset('Helsinki-NLP/opus-100', f'{config["lang_src"]}-{config["lang_tgt"]}', split = 'train[0:500]') 
+    ds_raw = load_dataset('Helsinki-NLP/opus-100', f'{config["lang_src"]}-{config["lang_tgt"]}', split = f'train[{config["train_range"]}]') 
     
     # Building or loading tokenizer for both the source and target languages 
     tokenizer_src = build_tokenizer(config, config['lang_src'], ds_raw)
@@ -748,33 +749,39 @@ def train_model(config):
         }, model_filename)
 
 # Define settings for building and training the transformer model
-def get_config(lang_src, 
-               lang_tgt, 
-               seq_len, 
-               d_model = 512, 
-               batch_size = 8, 
-               num_epochs = 20, 
-               lr = 10**-4, 
-               model_folder = 'weights', 
-               model_basename = 'tmodel_',
-               preload = None,
-               tokenizer_file = 'tokenizer_{0}.json',
-               experiment_name = 'runs/tmodel',
-               train_preload=None):
+def get_config():
+    batch_size = int(os.getenv('batch_size', 8))
+    num_epochs = int(os.getenv('num_epochs', 20))
+    seq_len = int(os.getenv('seq_len', 200))
+    lang_src = os.getenv('lang_src', 'en')
+    lang_tgt = os.getenv('lang_tgt', 'uk')
+    preload = os.getenv('preload')
+    translate_preload=os.getenv('translate_preload')
+    train_range = os.getenv('train_range', ':1%')
+
+    model_folder = 'weights'
+    model_basename = 'tmodel_'
+    tokenizer_file = 'tokenizer_{0}.json'
+    experiment_name = 'runs/tmodel'
+    lr = 10**-4
+
+    base_folder = f'{lang_src}-to-{lang_tgt}'
+    
     return {
         'batch_size': batch_size,
         'num_epochs': num_epochs,
         'lr': lr,
         'seq_len': seq_len,
-        'd_model': d_model, # Dimensions of the embeddings in the Transformer. 512 like in the "Attention Is All You Need" paper.
+        'd_model': 512, # Dimensions of the embeddings in the Transformer. 512 like in the "Attention Is All You Need" paper.
         'lang_src': lang_src,
         'lang_tgt': lang_tgt,
-        'model_folder': f'{lang_src}-to-{lang_tgt}/{model_folder}',
+        'model_folder': f'{base_folder}/{model_folder}',
         'model_basename': model_basename,
         'preload': preload,
-        'tokenizer_file': f'{lang_src}-to-{lang_tgt}/{tokenizer_file}',
-        'experiment_name': f'{lang_src}-to-{lang_tgt}/{experiment_name}',
-        'train_preload': train_preload,
+        'tokenizer_file': f'{base_folder}/{tokenizer_file}',
+        'experiment_name': f'{base_folder}/{experiment_name}',
+        'translate_preload': translate_preload,
+        'train_range': train_range,
     }
 
 def translate(config): 
@@ -791,8 +798,8 @@ def translate(config):
     model.eval()
 
     # Load pretrained state
-    if config['train_preload']:
-        model_filename = get_weights_file_path(config, config['train_preload'])
+    if config['translate_preload']:
+        model_filename = get_weights_file_path(config, config['translate_preload'])
         print(f'Preloading model {model_filename}')
         state = torch.load(model_filename)
         model.load_state_dict(state['model_state_dict'])
