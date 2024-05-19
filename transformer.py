@@ -704,21 +704,19 @@ def train_model(config):
         # For each batch...
         for batch in batch_iterator:
             model.train() # Train the model
-            
+
+            start_time = time.time()
+
             # Loading input data and masks onto the GPU
             encoder_input = batch['encoder_input'].to(device)
             decoder_input = batch['decoder_input'].to(device)
             encoder_mask = batch['encoder_mask'].to(device)
             decoder_mask = batch['decoder_mask'].to(device)
             
-            start_time = time.time()
             # Running tensors through the Transformer
             encoder_output = model.encode(encoder_input, encoder_mask)
             decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask)
             proj_output = model.project(decoder_output)
-            end_time = time.time()
-
-            overall_time += (end_time - start_time)
             
             # Loading the target labels onto the GPU
             label = batch['label'].to(device)
@@ -742,6 +740,9 @@ def train_model(config):
             optimizer.zero_grad()
             
             global_step += 1 # Updating global step count
+
+            end_time = time.time()
+            overall_time += (end_time - start_time)
             
         # We run the 'run_validation' function at the end of each epoch
         # to evaluate model performance
