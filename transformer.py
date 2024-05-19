@@ -635,18 +635,13 @@ def get_weights_file_path(config, epoch: str):
     model_filename = f"{model_basename}{epoch}.pt" # Building filename
     return str(Path('.')/ model_folder/ model_filename) # Combining current directory, the model folder, and the model filename
 
-def get_device():
-    # Setting up device to run on GPU to train faster
-    device_id = 'cpu'
-    if torch.backends.mps.is_available(): device_id = 'mps'
-    if torch.cuda.is_available(): device_id = 'cuda'
-    device = torch.device(device_id)
-    return device
+def get_device(config):
+    return torch.device(config['device_id'])
 
 def train_model(config):
     print(config)
 
-    device = get_device()
+    device = get_device(config)
     print(f"Using device {device}")
     
     # Creating model directory to store weights
@@ -760,6 +755,19 @@ def train_model(config):
     
     print(f'Overall training time: {overall_time} seconds, epochs passed: {config["num_epochs"]}')
 
+def get_config_device_id():
+    # Setting up device to run on GPU to train faster
+    device_id = 'cpu'
+
+    env_device_id = os.getenv('device_id')
+    if env_device_id:
+        device_id = env_device_id
+    else:
+        if torch.backends.mps.is_available(): device_id = 'mps'
+        if torch.cuda.is_available(): device_id = 'cuda'
+
+    return device_id
+
 # Define settings for building and training the transformer model
 def get_config():
     batch_size = int(os.getenv('batch_size', 8))
@@ -768,6 +776,7 @@ def get_config():
     lang_src = os.getenv('lang_src', 'en')
     lang_tgt = os.getenv('lang_tgt', 'uk')
     preload = os.getenv('preload')
+    device_id = get_config_device_id()
     translate_preload=os.getenv('translate_preload')
     train_range = os.getenv('train_range', ':1%')
 
@@ -777,7 +786,7 @@ def get_config():
     experiment_name = 'runs/tmodel'
     lr = 10**-4
 
-    base_folder = f'{lang_src}-to-{lang_tgt}'
+    base_folder = f'{lang_src}-to-{lang_tgt}/{device_id}'
     
     return {
         'batch_size': batch_size,
@@ -794,6 +803,7 @@ def get_config():
         'experiment_name': f'{base_folder}/{experiment_name}',
         'translate_preload': translate_preload,
         'train_range': train_range,
+        'device_id': device_id,
     }
 
 def translate(config): 
